@@ -33,6 +33,8 @@ export default function (pi: ExtensionAPI) {
 	let config: RouterConfig | undefined;
 	let state: SessionState = { routed: false, mode: "auto", userOverrode: false };
 	let routingInFlight: Promise<void> | undefined;
+	let hadModelAtRouteStart = false;
+	let applyingOwnSwitch = false;
 
 	function availableModels(ctx: ExtensionContext): AnyModel[] {
 		const scoped = ctx.scopedModels;
@@ -71,12 +73,17 @@ export default function (pi: ExtensionAPI) {
 			(m) => `${m.provider}/${m.id}` === decision.modelRef,
 		);
 		if (!model) return false;
-		const ok = await pi.setModel(model);
-		if (!ok) return false;
-		if (decision.thinkingLevel) {
-			pi.setThinkingLevel(decision.thinkingLevel);
+		applyingOwnSwitch = true;
+		try {
+			const ok = await pi.setModel(model);
+			if (!ok) return false;
+			if (decision.thinkingLevel) {
+				pi.setThinkingLevel(decision.thinkingLevel);
+			}
+			return true;
+		} finally {
+			applyingOwnSwitch = false;
 		}
-		return true;
 	}
 
 	async function routeFirstTask(text: string, hasImages: boolean, ctx: ExtensionContext) {
@@ -140,7 +147,8 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		config = await loadConfig(ctx.cwd, homedir());
-		// Restore persisted state (mode, routed, userOverrode) from session entries.
+		// Config file provides the default mode; persisted session entries override it.
+		state = { ...state, mode: config.mode };
 		for (const entry of ctx.sessionManager.getEntries()) {
 			if (entry.type === "custom" && entry.customType === STATE_TYPE) {
 				state = { ...state, ...(entry.data as Partial<SessionState>) };
@@ -153,6 +161,7 @@ export default function (pi: ExtensionAPI) {
 		if (event.source === "extension") return;
 		if (state.routed || state.mode === "locked") return;
 		if (!routingInFlight) {
+			hadModelAtRouteStart = !!ctx.model;
 			routingInFlight = routeFirstTask(event.text, (event.images?.length ?? 0) > 0, ctx).finally(() => {
 				routingInFlight = undefined;
 			});
@@ -162,8 +171,9 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("model_select", async (event, ctx) => {
-		// A user-initiated change during routing takes precedence.
-		if (event.source === "set" && routingInFlight) {
+		// A user-initiated change during routing takes precedence. Ignore our own
+		// switch and startup-time default selection (no model was active yet).
+		if (event.source === "set" && routingInFlight && hadModelAtRouteStart && !applyingOwnSwitch) {
 			state = { ...state, userOverrode: true };
 		}
 		if (state.mode === "locked") {
