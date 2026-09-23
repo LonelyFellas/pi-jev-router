@@ -1,0 +1,31 @@
+{
+  "mode": "shadow",
+  "jev": {
+    "baseUrl": "https://api.typesafe.ai",
+    "apiKeyEnv": "TYPESAFE_API_KEY",
+    "timeoutMs": 5000
+  },
+  "candidates": [
+    {
+      "modelRef": "anthropic/claude-haiku-4-5",
+      "label": "Fast",
+      "costTier": 1,
+      "strengthTier": 1,
+      "thinkingLevel": "low"
+    },
+    {
+      "modelRef": "anthropic/claude-sonnet-4-6",
+      "label": "Balanced",
+      "costTier": 3,
+      "strengthTier": 3,
+      "thinkingLevel": "medium"
+    },
+    {
+      "modelRef": "anthropic/claude-opus-4-6",
+      "label": "Strong",
+      "costTier": 5,
+      "strengthTier": 5,
+      "thinkingLevel": "high"
+    }
+  ]
+}
