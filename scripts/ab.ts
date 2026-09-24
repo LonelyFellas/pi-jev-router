@@ -219,10 +219,10 @@ for (const task of TASKS) {
 		clearInterval(heartbeat);
 
 		const status = await runCommand("git status --porcelain", { cwd: worktreePath });
-		const diffStat = await runCommand("git diff --stat HEAD", { cwd: worktreePath });
-		// `git add -N` makes new files show up in the diff, so the patch is the whole change set.
-		// The node_modules symlink this script created is excluded: it is not the agent's work.
+		// `git add -N` first, so new files count in both the stat and the patch (a run that only
+		// creates files must not report 0 changed lines).
 		await runCommand("git add -A -N", { cwd: worktreePath });
+		const diffStat = await runCommand("git diff --stat HEAD", { cwd: worktreePath });
 		const patch = await runCommand('git diff HEAD -- . ":(exclude)node_modules"', { cwd: worktreePath });
 		await writeFile(patchPath, patch.stdout.slice(0, 400_000));
 		const changedFiles = status.stdout.split("\n").filter((line) => line.trim().length > 0).length;
