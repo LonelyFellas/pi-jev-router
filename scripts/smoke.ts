@@ -1,23 +1,15 @@
 /**
  * 端到端冒烟测试：Jev 分析 + 路由决策（不经过 pi UI）。
  * 运行：npx tsx scripts/smoke.ts
- * 需要：TYPESAFE_API_KEY 已设置；~/.pi/agent/pi-jev-router.json 已配置。
+ * 需要：Jev 凭证已配置（默认 TYPESAFE_API_KEY，或 jev.apiKey 凭证来源）；~/.pi/agent/pi-jev-router.json 已配置。
  */
 import { homedir } from "node:os";
 import { loadConfig } from "../src/config.ts";
-import { analyzeTask } from "../src/jev.ts";
+import { analyzeTask, describeFailure } from "../src/jev.ts";
 import { decideRoute } from "../src/router.ts";
-import type { AnyModel } from "../src/types.ts";
+import { MODELS } from "./models.ts";
 
 // 与 ~/.pi/agent/pi-jev-router.json 候选对应的最小模型信息
-const MODELS: AnyModel[] = [
-	{ provider: "openai-codex", id: "gpt-5.3-codex-spark", name: "spark", reasoning: true, input: ["text"], contextWindow: 128_000 },
-	{ provider: "deepseek", id: "deepseek-flash", name: "flash", reasoning: true, input: ["text", "image"], contextWindow: 1_000_000 },
-	{ provider: "cc-switch-kimi", id: "kimi-k2.7-code", name: "k2.7", reasoning: true, input: ["text", "image"], contextWindow: 262_144 },
-	{ provider: "openai-codex", id: "gpt-5.6-sol", name: "sol", reasoning: true, input: ["text", "image"], contextWindow: 272_000 },
-	{ provider: "openai-codex", id: "gpt-6-astra", name: "astra", reasoning: true, input: ["text", "image"], contextWindow: 1_000_000 },
-] as AnyModel[];
-
 const TASKS: Array<{ text: string; hasImages: boolean }> = [
 	{ text: "TypeScript 里 readonly 数组怎么定义？", hasImages: false },
 	{ text: "修复登录过期后页面一直转圈的问题", hasImages: false },
@@ -25,7 +17,10 @@ const TASKS: Array<{ text: string; hasImages: boolean }> = [
 	{ text: "把前端登录态管理和后端 session 续期逻辑整体重构，统一前后端的过期处理", hasImages: false },
 ];
 
-const config = await loadConfig(process.cwd(), homedir());
+const { config, issues } = await loadConfig(process.cwd(), homedir());
+if (issues.length > 0) {
+	console.log(`配置问题：\n  ${issues.join("\n  ")}`);
+}
 
 for (const task of TASKS) {
 	const start = Date.now();
@@ -47,6 +42,9 @@ for (const task of TASKS) {
 		);
 		console.log(`  路由: ${decision.modelRef}${decision.thinkingLevel ? `/${decision.thinkingLevel}` : ""} (${decision.label})`);
 	} catch (error) {
-		console.log(`\n任务: ${task.text.slice(0, 40)} → 失败: ${(error as Error).message}`);
+		const failure = describeFailure(error, Date.now() - start);
+		console.log(
+			`\n任务: ${task.text.slice(0, 40)} → 失败[${failure.category}${failure.status ? ` ${failure.status}` : ""}] ${failure.elapsedMs}ms: ${failure.message}`,
+		);
 	}
 }

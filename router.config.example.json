@@ -2,7 +2,7 @@
   "mode": "shadow",
   "jev": {
     "baseUrl": "https://api.typesafe.ai",
-    "apiKeyEnv": "TYPESAFE_API_KEY",
+    "apiKey": "$TYPESAFE_API_KEY",
     "timeoutMs": 5000
   },
   "candidates": [

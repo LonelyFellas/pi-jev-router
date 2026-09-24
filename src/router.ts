@@ -5,6 +5,8 @@ import type {
 	ModelLike,
 	RouteCandidate,
 	RouteDecision,
+	RouteFailure,
+	RouteMode,
 	RouterConfig,
 } from "./types.ts";
 
@@ -100,6 +102,26 @@ function pickCandidate(
 	return pool[0];
 }
 
+/**
+ * Whether any configured candidate could possibly be picked, using only information
+ * available before the analysis: it must resolve to an available model, and must accept
+ * images when the task has them. `taskTypes` needs the analyzer's task type, so this is
+ * a necessary condition only — `false` means `pickCandidate` would return undefined for
+ * every possible analysis, which makes a Jev request pointless.
+ */
+export function hasRouteableCandidate(
+	config: RouterConfig,
+	availableModels: AnyModel[],
+	hasImages: boolean,
+): boolean {
+	return config.candidates.some((candidate) => {
+		const model = resolveModel(candidate.modelRef, availableModels);
+		if (!model) return false;
+		if (hasImages && !model.input.includes("image")) return false;
+		return true;
+	});
+}
+
 export interface RouteInput {
 	taskText: string;
 	hasImages: boolean;
@@ -108,6 +130,10 @@ export interface RouteInput {
 	config: RouterConfig;
 	availableModels: AnyModel[];
 	currentModel?: ModelLike;
+	/** Reason recorded when no analysis is available (e.g. the analyzer was skipped). */
+	noAnalysisReason?: string;
+	/** Analyzer failure to keep visible on the decision, when there was one. */
+	failure?: RouteFailure;
 }
 
 /**
@@ -118,12 +144,24 @@ export function decideRoute(input: RouteInput): RouteDecision {
 	const { analysis, config, availableModels, currentModel } = input;
 
 	if (!analysis) {
-		return fallbackDecision(config, availableModels, currentModel, "Jev 不可用，使用当前模型");
+		return fallbackDecision(
+			config,
+			availableModels,
+			currentModel,
+			input.noAnalysisReason ?? "Jev 不可用，使用当前模型",
+			input.failure,
+		);
 	}
 
 	const picked = pickCandidate(analysis, config.candidates, availableModels);
 	if (!picked) {
-		return fallbackDecision(config, availableModels, currentModel, "没有匹配的候选模型，使用当前模型");
+		return fallbackDecision(
+			config,
+			availableModels,
+			currentModel,
+			"没有匹配的候选模型，使用当前模型",
+			input.failure,
+		);
 	}
 
 	const reasonParts = [
@@ -139,6 +177,36 @@ export function decideRoute(input: RouteInput): RouteDecision {
 		reason: reasonParts.join(" · "),
 		fromJev: true,
 		analysis,
+		// Recorded for calibration only: no routing decision depends on it yet.
+		confidence: input.confidence,
+	};
+}
+
+export interface RouteApplicationPlan {
+	/** Switch the active model to the decision's model. */
+	switchModel: boolean;
+	/** Apply the decision's thinking level to whatever model ends up active. */
+	applyThinkingLevel: boolean;
+}
+
+/**
+ * Decide what a routing decision should actually do. Kept separate from the
+ * model switch so a recommendation for the already-active model still applies
+ * its thinking level. Shadow mode and user overrides never apply anything.
+ */
+export function planRouteApplication(
+	decision: RouteDecision,
+	mode: RouteMode,
+	userOverrode: boolean,
+	currentModelRef: string | undefined,
+): RouteApplicationPlan {
+	if (mode !== "auto" || userOverrode) {
+		return { switchModel: false, applyThinkingLevel: false };
+	}
+	const alreadyActive = !!currentModelRef && currentModelRef === decision.modelRef;
+	return {
+		switchModel: !alreadyActive,
+		applyThinkingLevel: decision.thinkingLevel !== undefined,
 	};
 }
 
@@ -147,6 +215,7 @@ function fallbackDecision(
 	availableModels: AnyModel[],
 	currentModel: ModelLike | undefined,
 	reason: string,
+	failure?: RouteFailure,
 ): RouteDecision {
 	if (config.fallbackModelRef) {
 		const model = resolveModel(config.fallbackModelRef, availableModels);
@@ -156,6 +225,7 @@ function fallbackDecision(
 				label: "Fallback",
 				reason,
 				fromJev: false,
+				...(failure && { failure }),
 			};
 		}
 	}
@@ -169,5 +239,6 @@ function fallbackDecision(
 		label: "Current",
 		reason,
 		fromJev: false,
+		...(failure && { failure }),
 	};
 }

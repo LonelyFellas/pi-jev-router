@@ -3,7 +3,7 @@
  * Run: npx tsx src/router.test.ts
  */
 import assert from "node:assert/strict";
-import { decideRoute } from "./router.ts";
+import { decideRoute, hasRouteableCandidate, planRouteApplication } from "./router.ts";
 import type { AnyModel, JevTaskAnalysis, RouterConfig } from "./types.ts";
 
 function fakeModel(ref: string, opts: Partial<AnyModel> = {}): AnyModel {
@@ -98,6 +98,154 @@ function analysis(overrides: Partial<JevTaskAnalysis> = {}): JevTaskAnalysis {
 	});
 	assert.equal(d.modelRef, "test/cheap");
 	assert.equal(d.fromJev, false);
+}
+
+// 6. Application plan — a recommendation for the already-active model must still
+//    apply its thinking level (switch and level are decided independently).
+{
+	const strong = { modelRef: "test/strong", thinkingLevel: "xhigh" as const, label: "S", reason: "r", fromJev: true };
+
+	const sameModel = planRouteApplication(strong, "auto", false, "test/strong");
+	assert.equal(sameModel.switchModel, false);
+	assert.equal(sameModel.applyThinkingLevel, true, "thinking level must apply without a model switch");
+
+	const otherModel = planRouteApplication(strong, "auto", false, "test/mid");
+	assert.deepEqual(otherModel, { switchModel: true, applyThinkingLevel: true });
+
+	const noCurrentModel = planRouteApplication(strong, "auto", false, undefined);
+	assert.deepEqual(noCurrentModel, { switchModel: true, applyThinkingLevel: true });
+
+	// Shadow mode and locked mode never apply anything.
+	assert.deepEqual(planRouteApplication(strong, "shadow", false, "test/mid"), {
+		switchModel: false,
+		applyThinkingLevel: false,
+	});
+	assert.deepEqual(planRouteApplication(strong, "locked", false, "test/mid"), {
+		switchModel: false,
+		applyThinkingLevel: false,
+	});
+
+	// A user override wins over the recommendation.
+	assert.deepEqual(planRouteApplication(strong, "auto", true, "test/mid"), {
+		switchModel: false,
+		applyThinkingLevel: false,
+	});
+
+	// No recommended level (e.g. non-reasoning model) → nothing to apply.
+	const noLevel = { modelRef: "test/mid", label: "M", reason: "r", fromJev: false };
+	assert.deepEqual(planRouteApplication(noLevel, "auto", false, "test/mid"), {
+		switchModel: false,
+		applyThinkingLevel: false,
+	});
+}
+
+// 7. Local pre-filter: a Jev request may only be skipped when no candidate could ever be
+//    picked, otherwise the saved request would change the outcome.
+{
+	assert.equal(hasRouteableCandidate(config, models, false), true);
+	assert.equal(hasRouteableCandidate(config, models, true), true, "test/vision is image-capable");
+	assert.equal(hasRouteableCandidate({ ...config, candidates: [] }, models, false), false);
+
+	const missingModels: RouterConfig = {
+		...config,
+		candidates: [{ modelRef: "test/ghost", label: "G", costTier: 1, strengthTier: 1 }],
+	};
+	assert.equal(hasRouteableCandidate(missingModels, models, false), false);
+
+	const noVision: RouterConfig = {
+		...config,
+		candidates: [{ modelRef: "test/mid", label: "M", costTier: 1, strengthTier: 1 }],
+	};
+	assert.equal(hasRouteableCandidate(noVision, models, true), false);
+	assert.equal(hasRouteableCandidate(noVision, models, false), true);
+
+	// When it is false, every possible analysis falls back — which is what makes skipping
+	// the request equivalent, so assert that equivalence rather than assume it.
+	for (const taskAnalysis of [
+		analysis(),
+		analysis({ taskType: "build", complexity: 5, risk: 5, needsVision: true }),
+		analysis({ taskType: "review", complexity: 3, risk: 2 }),
+	]) {
+		const d = decideRoute({
+			taskText: "t",
+			hasImages: taskAnalysis.needsVision,
+			analysis: taskAnalysis,
+			config: missingModels,
+			availableModels: models,
+			currentModel: { provider: "test", id: "mid", name: "mid", reasoning: true, input: ["text"], contextWindow: 1 },
+		});
+		assert.equal(d.fromJev, false);
+		assert.equal(d.modelRef, "test/mid");
+	}
+}
+
+// 8. Confidence and failure info are carried on the decision for calibration and
+//    troubleshooting, without affecting which model is picked.
+{
+	const withConfidence = decideRoute({
+		taskText: "hi",
+		hasImages: false,
+		analysis: analysis(),
+		confidence: 0.42,
+		config,
+		availableModels: models,
+	});
+	assert.equal(withConfidence.confidence, 0.42);
+	assert.equal(withConfidence.modelRef, "test/cheap");
+	assert.equal(withConfidence.failure, undefined);
+
+	assert.equal(
+		decideRoute({ taskText: "hi", hasImages: false, analysis: analysis(), config, availableModels: models }).confidence,
+		undefined,
+	);
+
+	const failure = { category: "timeout" as const, message: "Jev request timed out", elapsedMs: 5001 };
+	const fellBack = decideRoute({
+		taskText: "hi",
+		hasImages: false,
+		config,
+		availableModels: models,
+		currentModel: { provider: "test", id: "mid", name: "mid", reasoning: true, input: ["text"], contextWindow: 1 },
+		noAnalysisReason: "没有可用的候选模型，使用当前模型",
+		failure,
+	});
+	assert.equal(fellBack.fromJev, false);
+	assert.equal(fellBack.reason, "没有可用的候选模型，使用当前模型");
+	assert.deepEqual(fellBack.failure, failure);
+
+	// The default reason still applies when the caller does not supply one.
+	assert.equal(
+		decideRoute({ taskText: "hi", hasImages: false, config, availableModels: models }).reason,
+		"Jev 不可用，使用当前模型",
+	);
+}
+
+// 9. A candidate pinned to "off" keeps its level and gains no capability boost, so it is
+//    still eligible for simple work (this is the value the validator used to reject).
+{
+	const pinned: RouterConfig = {
+		...config,
+		candidates: [
+			{ modelRef: "test/mid", label: "Mid off", costTier: 1, strengthTier: 4, thinkingLevel: "off" },
+			{ modelRef: "test/strong", label: "Strong", costTier: 5, strengthTier: 5 },
+		],
+	};
+	assert.equal(
+		decideRoute({ taskText: "hi", hasImages: false, analysis: analysis({ complexity: 3 }), config: pinned, availableModels: models })
+			.modelRef,
+		"test/mid",
+		"a pinned 'off' keeps the cheap candidate eligible",
+	);
+	const decision = decideRoute({
+		taskText: "hi",
+		hasImages: false,
+		analysis: analysis({ complexity: 2 }),
+		config: pinned,
+		availableModels: models,
+	});
+	assert.equal(decision.modelRef, "test/mid");
+	assert.equal(decision.thinkingLevel, "off");
+	assert.equal(planRouteApplication(decision, "auto", false, "test/other").applyThinkingLevel, true);
 }
 
 console.log("router.test: all assertions passed");
