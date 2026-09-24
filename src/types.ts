@@ -37,6 +37,14 @@ export interface RouterConfig {
 	candidates: RouteCandidate[];
 	/** Fallback model reference used when Jev is unavailable or undecided. */
 	fallbackModelRef?: string;
+	/**
+	 * What to do when the analyzer calls the first task under-specified
+	 * (`analysis.sufficient === false`). `advisory` (default) keeps the current model and only
+	 * shows the recommendation; `route` applies it anyway.
+	 */
+	insufficientPolicy?: "advisory" | "route";
+	/** Treat an analysis below this confidence as advisory too. 0 (default) disables it. */
+	minConfidence?: number;
 	/** Jev API settings. Credentials resolve per request; values are never logged. */
 	jev: {
 		baseUrl: string; // e.g. https://api.typesafe.ai
@@ -94,10 +102,12 @@ export interface RouteDecision {
 	 */
 	effectiveThinkingLevel?: ThinkingLevel;
 	/**
-	 * The decision was left advisory: the analysis called the task under-specified, so the
+	 * The decision was left advisory: the analysis was not trustworthy enough to act on, so the
 	 * current model and level were kept and this is only a suggestion.
 	 */
 	advisory?: boolean;
+	/** Why it was left advisory, so status and notifications can say which gate fired. */
+	advisoryReason?: "insufficient" | "low-confidence";
 	/** Present when the analyzer failed and the decision fell back. */
 	failure?: RouteFailure;
 }

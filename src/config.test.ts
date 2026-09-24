@@ -137,4 +137,22 @@ import { DEFAULT_CONFIG, mergeConfig, parseRouterConfig } from "./config.ts";
 	assert.equal(patch.jev?.apiKey, "!security find-generic-password -w -s jev");
 }
 
+// 7. Policy fields: valid values pass through, invalid ones are reported and omitted.
+{
+	const { patch, issues } = parseRouterConfig({ insufficientPolicy: "route", minConfidence: 0.4 });
+	assert.deepEqual(issues, []);
+	assert.equal(patch.insufficientPolicy, "route");
+	assert.equal(patch.minConfidence, 0.4);
+
+	const invalid = parseRouterConfig({ insufficientPolicy: "guess", minConfidence: 2 });
+	assert.equal(invalid.patch.insufficientPolicy, undefined);
+	assert.equal(invalid.patch.minConfidence, undefined);
+	assert.equal(invalid.issues.length, 2, invalid.issues.join(" | "));
+	assert.match(invalid.issues.join("\n"), /insufficientPolicy 非法.*可选 advisory\/route/);
+	assert.match(invalid.issues.join("\n"), /minConfidence 必须是 0–1 的有限数/);
+
+	assert.equal(mergeConfig(DEFAULT_CONFIG, parseRouterConfig({}).patch).insufficientPolicy, "advisory");
+	assert.equal(mergeConfig(DEFAULT_CONFIG, parseRouterConfig({}).patch).minConfidence, 0);
+}
+
 console.log("config.test: all assertions passed");

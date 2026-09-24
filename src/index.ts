@@ -17,8 +17,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { loadConfig } from "./config.ts";
 import { describeCredentialSource } from "./credentials.ts";
 import { analyzeTask, describeFailure } from "./jev.ts";
-import { decideRoute, hasRouteableCandidate, planRouteApplication } from "./router.ts";
-import type { AnyModel, RouteDecision, RouteMode, RouterConfig, ThinkingLevel } from "./types.ts";
+import { decideRoute, hasRouteableCandidate, planRouteApplication } from "./router.ts";import type { AnyModel, RouteDecision, RouteMode, RouterConfig, ThinkingLevel } from "./types.ts";
 
 const STATE_TYPE = "pi-jev-router-state";
 const STATUS_KEY = "jev-router";
@@ -193,7 +192,10 @@ export default function (pi: ExtensionAPI) {
 
 		const currentModelRef = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
 		const already = currentModelRef !== undefined && currentModelRef === decision.modelRef;
-		const plan = planRouteApplication(decision, state.mode, state.userOverrode, currentModelRef);
+		const plan = planRouteApplication(decision, state.mode, state.userOverrode, currentModelRef, {
+			insufficientPolicy: config.insufficientPolicy ?? "advisory",
+			minConfidence: config.minConfidence ?? 0,
+		});
 
 		let switchFailed = false;
 		if (plan.switchModel) {
@@ -209,7 +211,7 @@ export default function (pi: ExtensionAPI) {
 			decision = { ...decision, effectiveThinkingLevel: appliedLevel };
 		}
 		if (plan.advisory) {
-			decision = { ...decision, advisory: true };
+			decision = { ...decision, advisory: true, ...(plan.advisoryReason && { advisoryReason: plan.advisoryReason }) };
 		}
 		const activeRef =
 			plan.switchModel && !switchFailed ? decision.modelRef : already ? decision.modelRef : undefined;
@@ -226,7 +228,7 @@ export default function (pi: ExtensionAPI) {
 		let verb: string;
 		if (state.mode === "shadow") verb = "建议";
 		else if (switchFailed) verb = "切换失败，保持";
-		else if (plan.advisory) verb = "描述不充分，保留当前模型";
+		else if (plan.advisory) verb = plan.advisoryReason === "low-confidence" ? "置信度不足，保留当前模型" : "描述不充分，保留当前模型";
 		else if (state.userOverrode && !already) verb = "保留用户选择";
 		else if (!already) verb = "已选择";
 		else verb = appliedLevel ? "保持模型，调整推理强度" : "保持";
@@ -320,7 +322,8 @@ export default function (pi: ExtensionAPI) {
 					lines.push(`分析：${d.analysis.taskType} · 描述充分 ${d.analysis.sufficient ? "是" : "否"}${confidence}`);
 				}
 				if (d.advisory) {
-					lines.push("处理：描述不充分，保留当前模型（仅建议）");
+					const why = d.advisoryReason === "low-confidence" ? "置信度不足" : "描述不充分";
+					lines.push(`处理：${why}，保留当前模型（仅建议）`);
 				}
 				if (d.failure) {
 					const status = d.failure.status !== undefined ? ` ${d.failure.status}` : "";

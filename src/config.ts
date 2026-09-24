@@ -14,13 +14,15 @@ const MODES: RouteMode[] = ["auto", "locked", "shadow"];
 // Mirrors what pi accepts at runtime, so a candidate can be pinned to "off" (no thinking).
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const TASK_TYPES: TaskType[] = ["qa", "docs", "refactor", "bugfix", "debug", "review", "build"];
-const CONFIG_KEYS = new Set(["mode", "candidates", "fallbackModelRef", "jev"]);
+const CONFIG_KEYS = new Set(["mode", "candidates", "fallbackModelRef", "insufficientPolicy", "minConfidence", "jev"]);
 const JEV_KEYS = new Set(["baseUrl", "apiKey", "apiKeyEnv", "timeoutMs"]);
 
 export const DEFAULT_CONFIG: RouterConfig = {
 	mode: "auto",
 	fallbackModelRef: undefined,
 	candidates: [],
+	insufficientPolicy: "advisory",
+	minConfidence: 0,
 	jev: {
 		baseUrl: "https://api.typesafe.ai",
 		apiKeyEnv: "TYPESAFE_API_KEY",
@@ -33,6 +35,8 @@ export interface ConfigPatch {
 	mode?: RouteMode;
 	candidates?: RouteCandidate[];
 	fallbackModelRef?: string;
+	insufficientPolicy?: "advisory" | "route";
+	minConfidence?: number;
 	jev?: Partial<RouterConfig["jev"]>;
 }
 
@@ -168,6 +172,25 @@ export function parseRouterConfig(raw: unknown): ParsedConfig {
 		const fallbackModelRef = nonEmptyString(raw.fallbackModelRef);
 		if (fallbackModelRef) patch.fallbackModelRef = fallbackModelRef;
 		else issues.push("fallbackModelRef 不是非空字符串，已忽略");
+	}
+
+	if (raw.insufficientPolicy !== undefined) {
+		if (raw.insufficientPolicy === "advisory" || raw.insufficientPolicy === "route") {
+			patch.insufficientPolicy = raw.insufficientPolicy;
+		} else {
+			issues.push(
+				`insufficientPolicy 非法（${JSON.stringify(raw.insufficientPolicy)}），可选 advisory/route，已使用 ${DEFAULT_CONFIG.insufficientPolicy}`,
+			);
+		}
+	}
+
+	if (raw.minConfidence !== undefined) {
+		const minConfidence = raw.minConfidence;
+		if (typeof minConfidence === "number" && Number.isFinite(minConfidence) && minConfidence >= 0 && minConfidence <= 1) {
+			patch.minConfidence = minConfidence;
+		} else {
+			issues.push(`minConfidence 必须是 0–1 的有限数（${JSON.stringify(minConfidence)}），已忽略`);
+		}
 	}
 
 	const jev: Partial<RouterConfig["jev"]> = {};

@@ -267,7 +267,7 @@ function analysis(overrides: Partial<JevTaskAnalysis> = {}): JevTaskAnalysis {
 	for (const current of ["test/mid", "test/strong", undefined]) {
 		assert.deepEqual(
 			planRouteApplication(insufficient, "auto", false, current),
-			{ switchModel: false, applyThinkingLevel: false, advisory: true },
+			{ switchModel: false, applyThinkingLevel: false, advisory: true, advisoryReason: "insufficient" },
 			`advisory decision must not act (current=${current})`,
 		);
 	}
@@ -281,6 +281,44 @@ function analysis(overrides: Partial<JevTaskAnalysis> = {}): JevTaskAnalysis {
 	// A missing analysis (fallback decision) is not "insufficient": no advisory flag.
 	const plain = { modelRef: "test/mid", label: "M", reason: "r", fromJev: false };
 	assert.equal(planRouteApplication(plain, "auto", false, undefined).advisory, false);
+}
+
+// 6c. Policy knobs: `insufficientPolicy: "route"` acts anyway, and `minConfidence` adds an
+//     independent gate that only applies when the analyzer reported a confidence.
+{
+	const insufficient = {
+		modelRef: "test/strong",
+		thinkingLevel: "high" as const,
+		label: "S",
+		reason: "r",
+		fromJev: true,
+		analysis: analysis({ complexity: 5, sufficient: false }),
+		confidence: 0.9,
+	};
+	assert.deepEqual(
+		planRouteApplication(insufficient, "auto", false, "test/mid", { insufficientPolicy: "route", minConfidence: 0 }),
+		{ switchModel: true, applyThinkingLevel: true, advisory: false },
+		"route policy keeps the old behaviour",
+	);
+
+	const sufficient = { ...insufficient, analysis: analysis({ complexity: 5 }) };
+	const lowConfidence = { ...sufficient, confidence: 0.3 };
+	assert.deepEqual(
+		planRouteApplication(lowConfidence, "auto", false, "test/mid", { insufficientPolicy: "advisory", minConfidence: 0.5 }),
+		{ switchModel: false, applyThinkingLevel: false, advisory: true, advisoryReason: "low-confidence" },
+	);
+	// Exactly at the threshold still passes; 0 disables the gate; a fallback decision has no
+	// confidence and is never gated on it.
+	assert.equal(
+		planRouteApplication({ ...sufficient, confidence: 0.5 }, "auto", false, "test/mid", { insufficientPolicy: "advisory", minConfidence: 0.5 })
+			.advisory,
+		false,
+	);
+	const plainDecision = { modelRef: "test/mid", label: "M", reason: "r", fromJev: false };
+	assert.equal(
+		planRouteApplication(plainDecision, "auto", false, "test/mid", { insufficientPolicy: "advisory", minConfidence: 0.9 }).advisory,
+		false,
+	);
 }
 
 console.log("router.test: all assertions passed");

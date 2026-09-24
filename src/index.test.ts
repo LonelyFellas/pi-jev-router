@@ -50,6 +50,8 @@ try {
 	let fetchMode: "fail" | "ok" = "fail";
 	// Fixture knob: 1 = the analyzer calls the task sufficient, 0 = under-specified.
 	let liveSufficiency = 1;
+	// Fixture knob for the confidence gate: analyzer confidence reported in the response.
+	let liveConfidence = 0.9;
 	let fetchCalls = 0;
 	globalThis.fetch = (async () => {
 		fetchCalls += 1;
@@ -57,7 +59,12 @@ try {
 		return new Response(
 			JSON.stringify({
 				...JEV_RESPONSE,
-				answers: { ...JEV_RESPONSE.answers, sufficient: { type: "noul", noul: liveSufficiency } },
+				answers: {
+					...JEV_RESPONSE.answers,
+					task_type: { ...JEV_RESPONSE.answers.task_type, confidence: liveConfidence },
+					complexity: { ...JEV_RESPONSE.answers.complexity, confidence: liveConfidence },
+					sufficient: { type: "noul", noul: liveSufficiency },
+				},
 			}),
 			{ status: 200, headers: { "content-type": "application/json" } },
 		);
@@ -292,6 +299,58 @@ try {
 			assert.equal(status, "route: current (建议 fallback/xhigh)");
 			assert.match(await getStatus(), /处理：描述不充分，保留当前模型/);
 			assert.match(notifications.join("\n"), /路由描述不充分，保留当前模型：fallback/);
+			liveSufficiency = 1;
+			fetchMode = "fail";
+
+			// A confidence threshold is a separate gate: same sufficient analysis, low confidence,
+			// and the message must name the gate that fired.
+			fetchMode = "ok";
+			liveConfidence = 0.2;
+			await writeFile(
+				join(configDir, "pi-jev-router.json"),
+				JSON.stringify({
+					mode: "auto",
+					fallbackModelRef: "test/fallback",
+					candidates: [{ modelRef: "test/fallback", label: "Fallback", costTier: 1, strengthTier: 1 }],
+					minConfidence: 0.5,
+					jev: { apiKey: "test-key", apiKeyEnv: NO_JEV_KEY_ENV },
+				}),
+			);
+			entries = [];
+			await start({ type: "session_start", reason: "new" }, ctx);
+			callsBeforeAdvisory = setModelCalls.length;
+			await input({ type: "input", source: "interactive", text: "first task" }, ctx);
+			assert.equal(setModelCalls.length, callsBeforeAdvisory, "low confidence must not switch models");
+			assert.match(await getStatus(), /处理：置信度不足，保留当前模型/);
+			assert.match(notifications.join("\n"), /路由置信度不足，保留当前模型：fallback/);
+			assert.equal(
+				(writes.at(-1) as { decision?: { advisoryReason?: string } }).decision?.advisoryReason,
+				"low-confidence",
+				"the persisted decision records which gate fired",
+			);
+
+			// `insufficientPolicy: "route"` restores switching when the task is under-specified.
+			liveConfidence = 0.9;
+			liveSufficiency = 0;
+			await writeFile(
+				join(configDir, "pi-jev-router.json"),
+				JSON.stringify({
+					mode: "auto",
+					fallbackModelRef: "test/fallback",
+					candidates: [{ modelRef: "test/fallback", label: "Fallback", costTier: 1, strengthTier: 1 }],
+					insufficientPolicy: "route",
+					jev: { apiKey: "test-key", apiKeyEnv: NO_JEV_KEY_ENV },
+				}),
+			);
+			entries = [];
+			await start({ type: "session_start", reason: "new" }, ctx);
+			callsBeforeAdvisory = setModelCalls.length;
+			await input({ type: "input", source: "interactive", text: "first task" }, ctx);
+			assert.equal(
+				setModelCalls.length - callsBeforeAdvisory,
+				1,
+				"insufficientPolicy=route keeps the previous behaviour",
+			);
 			liveSufficiency = 1;
 			fetchMode = "fail";
 		}

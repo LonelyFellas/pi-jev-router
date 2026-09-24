@@ -69,6 +69,8 @@ Pi 扩展：用 **Jev**（TypeSafe System One 决策模型）判断新会话首�
 - `thinkingLevel`：该候选被选中时使用的推理强度（可选），可选 `off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`；`off` 表示固定不思考。模型不支持的等级由 pi 收敛，实际生效值会显示在状态栏与 `/route status`。
 - `taskTypes`：限定该候选适用的任务类型（可选）。
 - `jev.apiKey`：凭证来源（推荐）。支持 `$ENV`、`${ENV}`、`!command`；不要把真实 key 提交到配置或聊天中。macOS 可用 `!/usr/bin/security find-generic-password -s pi-jev-router -a typesafe -w`。
+- `insufficientPolicy`：分析器判为描述不充分时的行为。`advisory`（默认）保留当前模型，只展示建议；`route` 仍然切换。
+- `minConfidence`：低于该置信度同样只建议（0–1，默认 `0` 即关闭）。用现有 20 条数据算过：低置信度组的预测返工率反而**低于**其余组（<0.5 组 0% vs 其余 28%，<0.6 组 0% vs 33%），说明置信度在这批样本上不预示返工，所以默认不开启。
 - `jev.apiKeyEnv`：兼容字段，存放 TypeSafe API key 的环境变量名，默认 `TYPESAFE_API_KEY`；未设置 `jev.apiKey` 时生效。
 
 安全：项目级 `.pi/pi-jev-router.json` 只在项目被信任后读取；`!command` 是可信本地配置，只在 Jev 请求时执行，带超时、输出上限和最小化环境，报错会抹掉凭证。缺少凭证时会回退到当前模型；仅有一个可用模型时不会发起 Jev 分析。
@@ -111,6 +113,8 @@ npx tsx scripts/eval.ts           # 打印评测计划（不联网）
 npx tsx scripts/eval.ts --run     # 评测并写盘（20 次 API 请求，可能计费）
 npx tsx scripts/eval.ts --rate    # 打印待评分清单
 npx tsx scripts/eval.ts --report  # 汇总质量列与分析器开销
+npx tsx scripts/ab.ts             # 打印档位对照计划（不调用模型）
+npx tsx scripts/ab.ts --run       # 同任务×两档的真实对照（会调模型、在 detached worktree 里跑）
 npx tsx scripts/smoke.ts          # Jev + 路由端到端冒烟（四次 API 请求）
 ```
 
@@ -139,7 +143,9 @@ npx tsx scripts/smoke.ts          # Jev + 路由端到端冒烟（四次 API 请
 3. 只看两个客观指标：能否一次完成、是否需要返工（不需要打 1–5 分）。
 4. 判定：低档返工率与高档相当 → 可以降档（历史数据上 `costTier` 均值从 2.20 降到 1.80）；低档明显更高 → 保持现档位。
 
-`scripts/eval.ts` 只能调 Jev 分析器，不会执行任务，所以这一步需要人工（或另写 runner），不要指望它能自动出结论。
+`scripts/eval.ts` 只能调 Jev 分析器，不会执行任务；同任务对照用 `scripts/ab.ts`：它把每条任务在 detached worktree 里用两个档位各跑一次，记录退出码、改动量、仓库检查（typecheck + 5 个测试）是否通过，并把完整 patch 写到 `ab-out/diffs/`。默认只打印计划，`--run` 才真的调模型；`--low`/`--high` 指定档位（如 `cc-switch-kimi/kimi-k2.7-code:high`），`--keep` 保留 worktree。
+
+跑完必须人工看两侧 patch 再填 `review`：**检查通过只说明没弄坏仓库，不代表任务真的做完**。
 
 ## 已知边界
 
@@ -149,6 +155,6 @@ npx tsx scripts/smoke.ts          # Jev + 路由端到端冒烟（四次 API 请
 - `scopedModels`（`--models` / `enabledModels`）非空时，只在其范围内选择。
 - 没有可路由候选时（未配置候选、候选都缺模型、带图任务但候选均不支持图片）不发 Jev 请求，直接用回退模型；`taskTypes` 依赖分析结果，不进本地预筛。
 - 配置错误不会被静默忽略：加载时逐字段校验，非法条目被丢弃、未知字段（`candidate` 这类拼写错误）会被点名，均在会话开始时提示一次；Jev 响应中的非有限数值会归类为 `invalid-response` 而不是变成 NaN。
-- 分析器认为描述不充分（`sufficient=false`）时不切换模型、也不改推理强度，只给建议：在描述不清的首条消息上换模型（还附带一次 prompt cache 失效）不划算。
+- 分析器认为描述不充分（`sufficient=false`）时不切换模型、也不改推理强度，只给建议（可用 `insufficientPolicy: "route"` 恢复切换）：在描述不清的首条消息上换模型（还附带一次 prompt cache 失效）不划算。
 - 失败信息只保留分类、HTTP 状态码与耗时，不保留响应正文：正文可能回显、截断或掩码化凭证，而它会写进 session 并被 `/route status` 展示。
 - 扩展以完整系统权限运行，配置只从上述受信任位置读取。

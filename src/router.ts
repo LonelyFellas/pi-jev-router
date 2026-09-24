@@ -188,17 +188,30 @@ export interface RouteApplicationPlan {
 	/** Apply the decision's thinking level to whatever model ends up active. */
 	applyThinkingLevel: boolean;
 	/**
-	 * True when the analysis was not confident enough to act on (the first task is
-	 * under-specified). The recommendation stays advisory: status and notifications show it,
-	 * but the current model and level are left alone.
+	 * True when the analysis was not trustworthy enough to act on. The recommendation stays
+	 * advisory: status and notifications show it, the current model and level are left alone.
 	 */
 	advisory: boolean;
+	/** Which gate made it advisory, for accurate messaging. */
+	advisoryReason?: "insufficient" | "low-confidence";
 }
+
+/**
+ * How much trust an analysis needs before the router acts on it. `minConfidence` 0 disables
+ * the confidence gate; `insufficientPolicy` "advisory" (the default) refuses to act on a task
+ * the analyzer called under-specified.
+ */
+export interface RoutePolicy {
+	insufficientPolicy: "advisory" | "route";
+	minConfidence: number;
+}
+
+export const DEFAULT_ROUTE_POLICY: RoutePolicy = { insufficientPolicy: "advisory", minConfidence: 0 };
 
 /**
  * Decide what a routing decision should actually do. Kept separate from the
  * model switch so a recommendation for the already-active model still applies
- * its thinking level. Shadow mode, user overrides and under-specified tasks never
+ * its thinking level. Shadow mode, user overrides and untrusted analyses never
  * apply anything.
  */
 export function planRouteApplication(
@@ -206,14 +219,23 @@ export function planRouteApplication(
 	mode: RouteMode,
 	userOverrode: boolean,
 	currentModelRef: string | undefined,
+	policy: RoutePolicy = DEFAULT_ROUTE_POLICY,
 ): RouteApplicationPlan {
 	if (mode !== "auto" || userOverrode) {
 		return { switchModel: false, applyThinkingLevel: false, advisory: false };
 	}
-	if (decision.analysis?.sufficient === false) {
-		// Routing on a description the analyzer called insufficient is a guess: switching
-		// would cost a model change (and a cache miss) for a recommendation we cannot trust.
-		return { switchModel: false, applyThinkingLevel: false, advisory: true };
+	// Acting on a description the analyzer called insufficient, or on a low-confidence
+	// analysis, is a guess: switching would cost a model change (and a cache miss) for a
+	// recommendation we cannot trust.
+	if (policy.insufficientPolicy === "advisory" && decision.analysis?.sufficient === false) {
+		return { switchModel: false, applyThinkingLevel: false, advisory: true, advisoryReason: "insufficient" };
+	}
+	if (
+		policy.minConfidence > 0 &&
+		typeof decision.confidence === "number" &&
+		decision.confidence < policy.minConfidence
+	) {
+		return { switchModel: false, applyThinkingLevel: false, advisory: true, advisoryReason: "low-confidence" };
 	}
 	const alreadyActive = !!currentModelRef && currentModelRef === decision.modelRef;
 	return {
