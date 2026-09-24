@@ -82,7 +82,7 @@ pi list
 - `candidates[].modelRef`：`provider/model-id`，必须存在于 pi 的模型目录中。
 - `costTier` 1–5：越小越便宜，能力满足时优先选便宜的。
 - `strengthTier` 1–5：基础能力档位；推理强度（thinkingLevel）会在其上加成。
-- `thinkingLevel`：该候选被选中时使用的推理强度（可选），可选 `off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`；`off` 表示固定不思考。该值是**下限**：复杂度更高的任务会把等级抬过它（让中档模型靠更强推理处理硬任务），简单任务不会压低它；唯一例外是 `off`，它是绝对的、不可抬。模型不支持的等级由 pi 收敛，实际生效值会显示在状态栏与 `/route status`。
+- `thinkingLevel`：该候选被选中时使用的推理强度（可选），可选 `off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`；`off` 表示固定不思考。该值是**固定 pin**：未 pin 时才按复杂度推导，pin 优先于推导（复杂度不会抬升已 pin 的候选——见下方“档位对照实验”的回退说明）。模型不支持的等级由 pi 收敛，实际生效值会显示在状态栏与 `/route status`。
 - `taskTypes`：限定该候选适用的任务类型（可选）。
 - `jev.apiKey`：凭证来源（推荐）。支持 `$ENV`、`${ENV}`、`!command`；不要把真实 key 提交到配置或聊天中。macOS 可用 `!/usr/bin/security find-generic-password -s pi-jev-router -a typesafe -w`。
 - `insufficientPolicy`：分析器判为描述不充分时的行为。`advisory`（默认）保留当前模型，只展示建议；`route` 仍然切换。
@@ -163,9 +163,11 @@ npx tsx scripts/smoke.ts          # Jev + 路由端到端冒烟（四次 API 请
 
 跑完必须人工看两侧 patch 再填 `review`：**检查通过只说明没弄坏仓库，不代表任务真的做完**。
 
-### 已跑过的对照结论（3 条 c4 边界任务 × `kimi/high` vs `sol/high`）
+### 两轮 A/B 对照的完整证据与回退决定
 
-低档 3/3 完成且检查全过（其中 `retryable-failure` 在 300s 超时被杀，但交付的改动是正确的）；两档的 patch 都逐条审过，低档不更差（高档在其中一条任务里额外引入了没人要求的硬失败）。结论已落地为路由策略：**pin 的推理强度改为下限而非固定值**——`complexity 4` 的任务改由中档模型以 `high` 处理（离线重放 20 条真实分析：4 条任务从最贵档降到中档，成本档均值 2.20 → 1.80），`complexity 5` 仍保留最贵档。样本小（每条仅一次）且低档出现一次超时，如以后出现低档完成率问题，先把该档的 `costTier` 调回来。
+第一轮（3 条 c4 任务）低档 `kimi/high` 全部完成，曾据此把 `thinkingLevel` 改为“下限”（让复杂度把中档抬到 `high` 处理 c4）。第二轮（同 3 条再跑一轮）暴露了问题：低档在 c4 上**连续 2 次超时（代码正确）、1 次未完成集成**（建了模块却没接进 `/route status`）；高档 6/6 全部完整完成，还主动把新测试加进了 CI workflow。
+
+**两轮合计低档 6 次运行只完整完成 3 次**，方向一致，不值得用坏默认值换成本。因此回退：`thinkingLevel` 恢复为**固定 pin**，c4 仍落在最贵档。这次流程的成本是几次真实调用，收益是没有把一个坏默认发出去。证据（结果与 patch）在本地 `ab-out/`。
 
 ## 已知边界
 

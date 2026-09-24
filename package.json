@@ -1,6 +1,6 @@
 {
   "name": "@darwish-yu/pi-jev-router",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "description": "Pi extension: route the first task of a session to a suitable model via the Jev (TypeSafe System One) decision model",
   "license": "MIT",

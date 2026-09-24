@@ -321,8 +321,8 @@ function analysis(overrides: Partial<JevTaskAnalysis> = {}): JevTaskAnalysis {
 	);
 }
 
-// 10. Pin 是下限，不是上限：复杂度可以把等级抬过 pin（让中档模型靠更强的推理处理 c4
-//     任务），但简单任务不会压低 pin；pin 为 "off" 时绝对不可抬。
+// 10. Pin 是固定值：复杂度永远不能把等级抬过 pin（A/B 对照表明中档模型在 c4 边界任务上
+//     不可靠，复杂度抬升已被回退），它只在未 pin 时才由复杂度推导。
 {
 	const pinned: RouterConfig = {
 		...config,
@@ -331,7 +331,7 @@ function analysis(overrides: Partial<JevTaskAnalysis> = {}): JevTaskAnalysis {
 			{ modelRef: "test/strong", label: "Strong", costTier: 5, strengthTier: 5 },
 		],
 	};
-	// complexity 4 → derived high；mid 的 medium pin 被抬到 high：3 + 1.4 = 4.4 ≥ 4 → 中档取代强档。
+	// complexity 4：mid 固定 medium（3 + 0.8 = 3.8 < 4）→ 强档胜出，复杂度不再抬升中档。
 	const raised = decideRoute({
 		taskText: "cross-module refactor",
 		hasImages: false,
@@ -339,35 +339,44 @@ function analysis(overrides: Partial<JevTaskAnalysis> = {}): JevTaskAnalysis {
 		config: pinned,
 		availableModels: models,
 	});
-	assert.equal(raised.modelRef, "test/mid", "a mid-tier candidate with raised level must beat the strong one for c4");
-	assert.equal(raised.thinkingLevel, "high");
+	assert.equal(raised.modelRef, "test/strong", "a fixed pin must keep c4 on the strong candidate");
+	assert.equal(raised.thinkingLevel, "high", "an unpinned winner still derives the level from complexity");
 
-	// complexity 5 → derived xhigh；mid 3 + 1.8 = 4.8 < 5 → 强档仍然胜出。
-	const c5 = decideRoute({
-		taskText: "hard debugging",
-		hasImages: false,
-		analysis: analysis({ taskType: "debug", complexity: 5, risk: 3 }),
-		config: pinned,
-		availableModels: models,
-	});
-	assert.equal(c5.modelRef, "test/strong");
+	// 未 pin 时等级仍由复杂度推导：complexity 5 → xhigh。
+	{
+		const unpinned: RouterConfig = {
+			...config,
+			candidates: [{ modelRef: "test/strong", label: "Strong", costTier: 5, strengthTier: 5 }],
+		};
+		const d = decideRoute({
+			taskText: "hard debugging",
+			hasImages: false,
+			analysis: analysis({ taskType: "debug", complexity: 5, risk: 3 }),
+			config: unpinned,
+			availableModels: models,
+		});
+		assert.equal(d.thinkingLevel, "xhigh", "an unpinned candidate still derives the level from complexity");
+	}
 
-	// 简单任务不压低 pin：complexity 1 → derived undefined → mid 仍是 medium。
-	assert.equal(
-		decideRoute({ taskText: "hi", hasImages: false, analysis: analysis({ complexity: 1 }), config: pinned, availableModels: models })
-			.thinkingLevel,
-		"medium",
-	);
-	// complexity 2 → derived low < medium pin → 中档仍是 medium。
+	// pin 优先于更低推导：complexity 2 → derived low，mid 仍是 medium。
 	{
 		const simpleConfig: RouterConfig = {
 			...config,
 			candidates: [{ modelRef: "test/mid", label: "Mid medium", costTier: 2, strengthTier: 3, thinkingLevel: "medium" }],
 		};
 		const d = decideRoute({ taskText: "t", hasImages: false, analysis: analysis({ complexity: 2 }), config: simpleConfig, availableModels: models });
-		assert.equal(d.thinkingLevel, "medium", "a simple task must not lower the pin");
+		assert.equal(d.thinkingLevel, "medium", "a pin wins over a lower derived level");
 	}
-	// pin 为 "off" 是绝对的：complexity 5 也不能抬。
+	// pin 优先于更高推导：complexity 5 → derived xhigh，mid 仍是 low。
+	{
+		const lowConfig: RouterConfig = {
+			...config,
+			candidates: [{ modelRef: "test/mid", label: "Mid low", costTier: 2, strengthTier: 3, thinkingLevel: "low" }],
+		};
+		const d = decideRoute({ taskText: "t", hasImages: false, analysis: analysis({ complexity: 5 }), config: lowConfig, availableModels: models });
+		assert.equal(d.thinkingLevel, "low", "a pin wins over a higher derived level");
+	}
+	// pin 为 "off" 同样是固定值：complexity 5 也不能抬。
 	{
 		const offConfig: RouterConfig = {
 			...config,
