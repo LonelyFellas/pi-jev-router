@@ -187,12 +187,19 @@ export interface RouteApplicationPlan {
 	switchModel: boolean;
 	/** Apply the decision's thinking level to whatever model ends up active. */
 	applyThinkingLevel: boolean;
+	/**
+	 * True when the analysis was not confident enough to act on (the first task is
+	 * under-specified). The recommendation stays advisory: status and notifications show it,
+	 * but the current model and level are left alone.
+	 */
+	advisory: boolean;
 }
 
 /**
  * Decide what a routing decision should actually do. Kept separate from the
  * model switch so a recommendation for the already-active model still applies
- * its thinking level. Shadow mode and user overrides never apply anything.
+ * its thinking level. Shadow mode, user overrides and under-specified tasks never
+ * apply anything.
  */
 export function planRouteApplication(
 	decision: RouteDecision,
@@ -201,12 +208,18 @@ export function planRouteApplication(
 	currentModelRef: string | undefined,
 ): RouteApplicationPlan {
 	if (mode !== "auto" || userOverrode) {
-		return { switchModel: false, applyThinkingLevel: false };
+		return { switchModel: false, applyThinkingLevel: false, advisory: false };
+	}
+	if (decision.analysis?.sufficient === false) {
+		// Routing on a description the analyzer called insufficient is a guess: switching
+		// would cost a model change (and a cache miss) for a recommendation we cannot trust.
+		return { switchModel: false, applyThinkingLevel: false, advisory: true };
 	}
 	const alreadyActive = !!currentModelRef && currentModelRef === decision.modelRef;
 	return {
 		switchModel: !alreadyActive,
 		applyThinkingLevel: decision.thinkingLevel !== undefined,
+		advisory: false,
 	};
 }
 

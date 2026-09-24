@@ -62,9 +62,17 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			// Auto mode: describe what is actually in use, keeping the model or level that was
-			// only recommended visible when they diverge (failed switch, user override, or pi
-			// clamping the level to what the model supports).
+			// only recommended visible when they diverge (failed switch, user override, advisory
+			// decision, or pi clamping the level to what the model supports).
 			const actualRef = actualModelRef ?? (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "");
+			if (d.advisory) {
+				const shown = actualRef || d.modelRef;
+				ctx.ui.setStatus(
+					STATUS_KEY,
+					`route: ${shortRef(shown)} (建议 ${shortRef(d.modelRef)}${levelSuffix(d.thinkingLevel)})`,
+				);
+				return;
+			}
 			if (actualRef && actualRef !== d.modelRef) {
 				const suggested = d.effectiveThinkingLevel ?? d.thinkingLevel;
 				ctx.ui.setStatus(
@@ -200,6 +208,9 @@ export default function (pi: ExtensionAPI) {
 		if (appliedLevel && appliedLevel !== decision.thinkingLevel) {
 			decision = { ...decision, effectiveThinkingLevel: appliedLevel };
 		}
+		if (plan.advisory) {
+			decision = { ...decision, advisory: true };
+		}
 		const activeRef =
 			plan.switchModel && !switchFailed ? decision.modelRef : already ? decision.modelRef : undefined;
 
@@ -215,6 +226,7 @@ export default function (pi: ExtensionAPI) {
 		let verb: string;
 		if (state.mode === "shadow") verb = "建议";
 		else if (switchFailed) verb = "切换失败，保持";
+		else if (plan.advisory) verb = "描述不充分，保留当前模型";
 		else if (state.userOverrode && !already) verb = "保留用户选择";
 		else if (!already) verb = "已选择";
 		else verb = appliedLevel ? "保持模型，调整推理强度" : "保持";
@@ -306,6 +318,9 @@ export default function (pi: ExtensionAPI) {
 					// Calibration data: recorded and displayed, but nothing routes on it yet.
 					const confidence = d.confidence !== undefined ? ` · 置信度 ${d.confidence.toFixed(2)}` : "";
 					lines.push(`分析：${d.analysis.taskType} · 描述充分 ${d.analysis.sufficient ? "是" : "否"}${confidence}`);
+				}
+				if (d.advisory) {
+					lines.push("处理：描述不充分，保留当前模型（仅建议）");
 				}
 				if (d.failure) {
 					const status = d.failure.status !== undefined ? ` ${d.failure.status}` : "";

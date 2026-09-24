@@ -93,6 +93,11 @@ export interface RouteDecision {
 	 * supports, so this can differ from `thinkingLevel` (e.g. xhigh → high).
 	 */
 	effectiveThinkingLevel?: ThinkingLevel;
+	/**
+	 * The decision was left advisory: the analysis called the task under-specified, so the
+	 * current model and level were kept and this is only a suggestion.
+	 */
+	advisory?: boolean;
 	/** Present when the analyzer failed and the decision fell back. */
 	failure?: RouteFailure;
 }

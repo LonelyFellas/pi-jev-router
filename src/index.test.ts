@@ -48,14 +48,19 @@ try {
 	// This file must stay offline even if a real key is present in the environment. The stub is
 	// the only fetch: "fail" keeps the analyzer failing, "ok" serves a canned Jev response.
 	let fetchMode: "fail" | "ok" = "fail";
+	// Fixture knob: 1 = the analyzer calls the task sufficient, 0 = under-specified.
+	let liveSufficiency = 1;
 	let fetchCalls = 0;
 	globalThis.fetch = (async () => {
 		fetchCalls += 1;
 		if (fetchMode === "fail") throw new Error("index.test must not perform network requests");
-		return new Response(JSON.stringify(JEV_RESPONSE), {
-			status: 200,
-			headers: { "content-type": "application/json" },
-		});
+		return new Response(
+			JSON.stringify({
+				...JEV_RESPONSE,
+				answers: { ...JEV_RESPONSE.answers, sufficient: { type: "noul", noul: liveSufficiency } },
+			}),
+			{ status: 200, headers: { "content-type": "application/json" } },
+		);
 	}) as typeof fetch;
 	const configDir = join(home, CONFIG_DIR_NAME, "agent");
 	await mkdir(configDir, { recursive: true });
@@ -271,6 +276,23 @@ try {
 			assert.equal(status, "route: fallback/high (建议 xhigh)");
 			assert.match(await getStatus(), /模型：test\/fallback \(high，xhigh 已收敛\)/);
 			assert.match(notifications.join("\n"), /xhigh 收敛为 high/);
+			fetchMode = "fail";
+
+			// An under-specified task must not switch models or levels: the recommendation is
+			// advisory only, and both the status and `/route status` must say so.
+			fetchMode = "ok";
+			liveSufficiency = 0;
+			entries = [];
+			await start({ type: "session_start", reason: "new" }, ctx);
+			let callsBeforeAdvisory = setModelCalls.length;
+			const levelBeforeAdvisory = liveLevel;
+			await input({ type: "input", source: "interactive", text: "修复登录过期后页面一直转圈" }, ctx);
+			assert.equal(setModelCalls.length, callsBeforeAdvisory, "an advisory decision must not switch models");
+			assert.equal(liveLevel, levelBeforeAdvisory, "an advisory decision must not change the thinking level");
+			assert.equal(status, "route: current (建议 fallback/xhigh)");
+			assert.match(await getStatus(), /处理：描述不充分，保留当前模型/);
+			assert.match(notifications.join("\n"), /路由描述不充分，保留当前模型：fallback/);
+			liveSufficiency = 1;
 			fetchMode = "fail";
 		}
 

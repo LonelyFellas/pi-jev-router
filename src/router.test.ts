@@ -110,25 +110,28 @@ function analysis(overrides: Partial<JevTaskAnalysis> = {}): JevTaskAnalysis {
 	assert.equal(sameModel.applyThinkingLevel, true, "thinking level must apply without a model switch");
 
 	const otherModel = planRouteApplication(strong, "auto", false, "test/mid");
-	assert.deepEqual(otherModel, { switchModel: true, applyThinkingLevel: true });
+	assert.deepEqual(otherModel, { switchModel: true, applyThinkingLevel: true, advisory: false });
 
 	const noCurrentModel = planRouteApplication(strong, "auto", false, undefined);
-	assert.deepEqual(noCurrentModel, { switchModel: true, applyThinkingLevel: true });
+	assert.deepEqual(noCurrentModel, { switchModel: true, applyThinkingLevel: true, advisory: false });
 
 	// Shadow mode and locked mode never apply anything.
 	assert.deepEqual(planRouteApplication(strong, "shadow", false, "test/mid"), {
 		switchModel: false,
 		applyThinkingLevel: false,
+		advisory: false,
 	});
 	assert.deepEqual(planRouteApplication(strong, "locked", false, "test/mid"), {
 		switchModel: false,
 		applyThinkingLevel: false,
+		advisory: false,
 	});
 
 	// A user override wins over the recommendation.
 	assert.deepEqual(planRouteApplication(strong, "auto", true, "test/mid"), {
 		switchModel: false,
 		applyThinkingLevel: false,
+		advisory: false,
 	});
 
 	// No recommended level (e.g. non-reasoning model) → nothing to apply.
@@ -136,6 +139,7 @@ function analysis(overrides: Partial<JevTaskAnalysis> = {}): JevTaskAnalysis {
 	assert.deepEqual(planRouteApplication(noLevel, "auto", false, "test/mid"), {
 		switchModel: false,
 		applyThinkingLevel: false,
+		advisory: false,
 	});
 }
 
@@ -246,6 +250,37 @@ function analysis(overrides: Partial<JevTaskAnalysis> = {}): JevTaskAnalysis {
 	assert.equal(decision.modelRef, "test/mid");
 	assert.equal(decision.thinkingLevel, "off");
 	assert.equal(planRouteApplication(decision, "auto", false, "test/other").applyThinkingLevel, true);
+}
+
+// 6b. An under-specified task (analysis.sufficient === false) must not change the model or
+//     the level: the recommendation stays advisory. Previewing it against `noLevel`, the
+//     gate applies on top of the normal "already active" logic.
+{
+	const insufficient = {
+		modelRef: "test/strong",
+		thinkingLevel: "high" as const,
+		label: "S",
+		reason: "r",
+		fromJev: true,
+		analysis: analysis({ complexity: 5, sufficient: false }),
+	};
+	for (const current of ["test/mid", "test/strong", undefined]) {
+		assert.deepEqual(
+			planRouteApplication(insufficient, "auto", false, current),
+			{ switchModel: false, applyThinkingLevel: false, advisory: true },
+			`advisory decision must not act (current=${current})`,
+		);
+	}
+	// A sufficient analysis of the same shape still applies.
+	const sufficient = { ...insufficient, analysis: analysis({ complexity: 5 }) };
+	assert.deepEqual(planRouteApplication(sufficient, "auto", false, "test/mid"), {
+		switchModel: true,
+		applyThinkingLevel: true,
+		advisory: false,
+	});
+	// A missing analysis (fallback decision) is not "insufficient": no advisory flag.
+	const plain = { modelRef: "test/mid", label: "M", reason: "r", fromJev: false };
+	assert.equal(planRouteApplication(plain, "auto", false, undefined).advisory, false);
 }
 
 console.log("router.test: all assertions passed");
