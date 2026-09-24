@@ -29,9 +29,19 @@ function resolveModel(ref: string, models: AnyModel[]): AnyModel | undefined {
 	return models.find((m) => m.provider === provider && m.id === id);
 }
 
+const LEVEL_ORDER: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+function maxLevel(a: ThinkingLevel | undefined, b: ThinkingLevel | undefined): ThinkingLevel | undefined {
+	if (a === undefined) return b;
+	if (b === undefined) return a;
+	return LEVEL_ORDER.indexOf(a) >= LEVEL_ORDER.indexOf(b) ? a : b;
+}
+
 /**
  * Effective thinking level for a candidate given task complexity.
- * Pinned candidate level wins; otherwise derive from complexity.
+ * A pinned level is a floor, not a ceiling: complexity may raise it (that is how the
+ * router lets a mid-tier model handle harder work), but a simple task never lowers it.
+ * Exception: a pinned "off" is absolute — the user asked for no thinking on this candidate.
  * Returns undefined for non-reasoning models.
  */
 function thinkingLevelFor(
@@ -40,7 +50,9 @@ function thinkingLevelFor(
 	analysis: JevTaskAnalysis,
 ): ThinkingLevel | undefined {
 	if (!model.reasoning) return undefined;
-	return candidate.thinkingLevel ?? THINKING_BY_COMPLEXITY[analysis.complexity];
+	const pinned = candidate.thinkingLevel;
+	if (pinned === "off") return "off";
+	return maxLevel(pinned, THINKING_BY_COMPLEXITY[analysis.complexity]);
 }
 
 /** Effective capability tier: base strength boosted by thinking level. */

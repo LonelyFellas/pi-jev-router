@@ -321,4 +321,61 @@ function analysis(overrides: Partial<JevTaskAnalysis> = {}): JevTaskAnalysis {
 	);
 }
 
+// 10. Pin 是下限，不是上限：复杂度可以把等级抬过 pin（让中档模型靠更强的推理处理 c4
+//     任务），但简单任务不会压低 pin；pin 为 "off" 时绝对不可抬。
+{
+	const pinned: RouterConfig = {
+		...config,
+		candidates: [
+			{ modelRef: "test/mid", label: "Mid medium", costTier: 2, strengthTier: 3, thinkingLevel: "medium" },
+			{ modelRef: "test/strong", label: "Strong", costTier: 5, strengthTier: 5 },
+		],
+	};
+	// complexity 4 → derived high；mid 的 medium pin 被抬到 high：3 + 1.4 = 4.4 ≥ 4 → 中档取代强档。
+	const raised = decideRoute({
+		taskText: "cross-module refactor",
+		hasImages: false,
+		analysis: analysis({ taskType: "refactor", complexity: 4, risk: 4 }),
+		config: pinned,
+		availableModels: models,
+	});
+	assert.equal(raised.modelRef, "test/mid", "a mid-tier candidate with raised level must beat the strong one for c4");
+	assert.equal(raised.thinkingLevel, "high");
+
+	// complexity 5 → derived xhigh；mid 3 + 1.8 = 4.8 < 5 → 强档仍然胜出。
+	const c5 = decideRoute({
+		taskText: "hard debugging",
+		hasImages: false,
+		analysis: analysis({ taskType: "debug", complexity: 5, risk: 3 }),
+		config: pinned,
+		availableModels: models,
+	});
+	assert.equal(c5.modelRef, "test/strong");
+
+	// 简单任务不压低 pin：complexity 1 → derived undefined → mid 仍是 medium。
+	assert.equal(
+		decideRoute({ taskText: "hi", hasImages: false, analysis: analysis({ complexity: 1 }), config: pinned, availableModels: models })
+			.thinkingLevel,
+		"medium",
+	);
+	// complexity 2 → derived low < medium pin → 中档仍是 medium。
+	{
+		const simpleConfig: RouterConfig = {
+			...config,
+			candidates: [{ modelRef: "test/mid", label: "Mid medium", costTier: 2, strengthTier: 3, thinkingLevel: "medium" }],
+		};
+		const d = decideRoute({ taskText: "t", hasImages: false, analysis: analysis({ complexity: 2 }), config: simpleConfig, availableModels: models });
+		assert.equal(d.thinkingLevel, "medium", "a simple task must not lower the pin");
+	}
+	// pin 为 "off" 是绝对的：complexity 5 也不能抬。
+	{
+		const offConfig: RouterConfig = {
+			...config,
+			candidates: [{ modelRef: "test/mid", label: "Off", costTier: 1, strengthTier: 1, thinkingLevel: "off" }],
+		};
+		const d = decideRoute({ taskText: "t", hasImages: false, analysis: analysis({ complexity: 5 }), config: offConfig, availableModels: models });
+		assert.equal(d.thinkingLevel, "off", "a pinned 'off' must never be raised");
+	}
+}
+
 console.log("router.test: all assertions passed");

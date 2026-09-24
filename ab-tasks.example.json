@@ -1,0 +1,17 @@
+[
+  {
+    "id": "config-split",
+    "prompt": "把 src/config.ts 的配置校验拆成若干可导出的纯函数（例如 parseCandidates、parseJevOptions、parsePolicy），parseRouterConfig 改为调用它们。行为必须完全不变：issue 的文案与产生顺序、thinkingLevel=\"off\" 仍然保留、未知字段被点名、分层合并语义都不变。不得修改 src/config.test.ts 里的既有断言，且它必须全绿。",
+    "extraChecks": []
+  },
+  {
+    "id": "retryable-failure",
+    "prompt": "给失败分类增加可重试语义：在 src/types.ts 的 RouteFailure 与 src/jev.ts 的 JevAnalysisError 上增加 retryable: boolean（network、timeout、http-server 为 true，missing-key、credential、http-client、invalid-response、aborted 为 false），describeFailure 必须把该字段带出来。不得修改 src/jev.test.ts 的既有断言（它必须保持全绿），并新增 src/jev-retryable.test.ts：不联网、用 stub fetch 覆盖至少 4 个分类，断言 retryable 取值正确。",
+    "extraChecks": ["npx tsx src/jev-retryable.test.ts"]
+  },
+  {
+    "id": "candidate-summary",
+    "prompt": "新增 src/candidates.ts，导出一个纯函数 summarizeCandidates(config: RouterConfig, models: AnyModel[]): string[]，为每个候选生成一行摘要，至少包含：modelRef、是否能解析到可用模型、是否支持图片、costTier/strengthTier、任务类型限制（没有则写“全部类型”）、thinkingLevel（没有则写“按复杂度推导”）。在同一文件里再导出一个 candidatesReport(config, models): string，把这些行拼成一段可直接放进 /route status 输出的多行文本。为它新增 src/candidates.test.ts（不联网）覆盖三种情况：候选模型不存在、候选不支持图片、候选限定了 taskTypes。不得修改 src/index.test.ts 的既有断言。",
+    "extraChecks": ["npx tsx src/candidates.test.ts"]
+  }
+]

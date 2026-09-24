@@ -66,7 +66,7 @@ Pi 扩展：用 **Jev**（TypeSafe System One 决策模型）判断新会话首�
 - `candidates[].modelRef`：`provider/model-id`，必须存在于 pi 的模型目录中。
 - `costTier` 1–5：越小越便宜，能力满足时优先选便宜的。
 - `strengthTier` 1–5：基础能力档位；推理强度（thinkingLevel）会在其上加成。
-- `thinkingLevel`：该候选被选中时使用的推理强度（可选），可选 `off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`；`off` 表示固定不思考。模型不支持的等级由 pi 收敛，实际生效值会显示在状态栏与 `/route status`。
+- `thinkingLevel`：该候选被选中时使用的推理强度（可选），可选 `off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`；`off` 表示固定不思考。该值是**下限**：复杂度更高的任务会把等级抬过它（让中档模型靠更强推理处理硬任务），简单任务不会压低它；唯一例外是 `off`，它是绝对的、不可抬。模型不支持的等级由 pi 收敛，实际生效值会显示在状态栏与 `/route status`。
 - `taskTypes`：限定该候选适用的任务类型（可选）。
 - `jev.apiKey`：凭证来源（推荐）。支持 `$ENV`、`${ENV}`、`!command`；不要把真实 key 提交到配置或聊天中。macOS 可用 `!/usr/bin/security find-generic-password -s pi-jev-router -a typesafe -w`。
 - `insufficientPolicy`：分析器判为描述不充分时的行为。`advisory`（默认）保留当前模型，只展示建议；`route` 仍然切换。
@@ -146,6 +146,10 @@ npx tsx scripts/smoke.ts          # Jev + 路由端到端冒烟（四次 API 请
 `scripts/eval.ts` 只能调 Jev 分析器，不会执行任务；同任务对照用 `scripts/ab.ts`：它把每条任务在 detached worktree 里用两个档位各跑一次，记录退出码、改动量、仓库检查（typecheck + 5 个测试）是否通过，并把完整 patch 写到 `ab-out/diffs/`。默认只打印计划，`--run` 才真的调模型；`--low`/`--high` 指定档位（如 `cc-switch-kimi/kimi-k2.7-code:high`），`--keep` 保留 worktree。
 
 跑完必须人工看两侧 patch 再填 `review`：**检查通过只说明没弄坏仓库，不代表任务真的做完**。
+
+### 已跑过的对照结论（3 条 c4 边界任务 × `kimi/high` vs `sol/high`）
+
+低档 3/3 完成且检查全过（其中 `retryable-failure` 在 300s 超时被杀，但交付的改动是正确的）；两档的 patch 都逐条审过，低档不更差（高档在其中一条任务里额外引入了没人要求的硬失败）。结论已落地为路由策略：**pin 的推理强度改为下限而非固定值**——`complexity 4` 的任务改由中档模型以 `high` 处理（离线重放 20 条真实分析：4 条任务从最贵档降到中档，成本档均值 2.20 → 1.80），`complexity 5` 仍保留最贵档。样本小（每条仅一次）且低档出现一次超时，如以后出现低档完成率问题，先把该档的 `costTier` 调回来。
 
 ## 已知边界
 

@@ -17,7 +17,7 @@
  * 注意：检查通过只是必要条件，任务是否真的做完仍需人工看 diff（结果文件留了 review 列）。
  */
 import { spawn } from "node:child_process";
-import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -158,13 +158,36 @@ if (!RUN) {
 
 await mkdir(join(OUT_DIR, "worktree"), { recursive: true });
 await mkdir(join(OUT_DIR, "sessions"), { recursive: true });
-console.log(`准备在 ${OUT_DIR}/worktree 下跑 ${TASKS.length * TIERS.length} 次，单次上限 ${TIMEOUT_SECONDS}s\n`);
+await mkdir(join(OUT_DIR, "diffs"), { recursive: true });
+const resultsPath = join(OUT_DIR, "ab-results.jsonl");
+
+// Abort-safety: always leave the repo without a dangling worktree, even on Ctrl+C.
+let currentWorktree: string | undefined;
+const onAbortSignal = () => {
+	if (!currentWorktree) process.exit(130);
+	console.error(`\n中断：清理 worktree ${currentWorktree}`);
+	void runCommand(`git worktree remove --force ${JSON.stringify(currentWorktree)}`, { cwd: REPO_ROOT }).finally(() =>
+		process.exit(130),
+	);
+};
+process.on("SIGINT", onAbortSignal);
+process.on("SIGTERM", onAbortSignal);
+
+console.log(`准备在 ${OUT_DIR}/worktree 下跑 ${TASKS.length * TIERS.length} 次，单次上限 ${TIMEOUT_SECONDS}s`);
+console.log("已有 patch 的任务会被跳过（删 ab-out/diffs/ 里对应文件可强制重跑）；结果逐条追加到 ab-results.jsonl\n");
 
 const results: AbRun[] = [];
+const skipped = new Set<string>();
 
 for (const task of TASKS) {
 	for (const tier of TIERS) {
 		const name = `${task.id}-${tier.name}`;
+		const patchPath = join(OUT_DIR, "diffs", `${name}.patch`);
+		if (existsSync(patchPath)) {
+			skipped.add(name);
+			console.log(`—— ${name}：已有 patch，跳过`);
+			continue;
+		}
 		const worktreePath = join(OUT_DIR, "worktree", name);
 		const { model, thinking } = parseTier(tier.ref);
 		console.log(`—— ${name}（${model}${thinking ? ` thinking=${thinking}` : ""}）`);
@@ -178,16 +201,22 @@ for (const task of TASKS) {
 		// 直接复用主 checkout 的依赖，避免每个 worktree 再装一次。
 		const modules = join(REPO_ROOT, "node_modules");
 		if (existsSync(modules)) await symlink(modules, join(worktreePath, "node_modules")).catch(() => {});
+		currentWorktree = worktreePath;
 
 		const thinkingFlag = thinking ? ` --thinking ${thinking}` : "";
 		const prompt = `--model ${model}${thinkingFlag} -p ${JSON.stringify(task.prompt)}`;
 		// --no-extensions: measure the model, not the router (this extension would otherwise
 		// route the first task and switch models mid-experiment).
 		// --approve: non-interactive runs do not prompt; be explicit about project resources.
+		const startedAt = Date.now();
+		const heartbeat = setInterval(() => {
+			console.log(`   …仍在运行（${Math.round((Date.now() - startedAt) / 1000)}s，上限 ${TIMEOUT_SECONDS}s）`);
+		}, 10_000);
 		const piRun = await runCommand(
 			`pi --no-extensions --approve --session-dir ${JSON.stringify(join(OUT_DIR, "sessions"))} ${prompt}`,
 			{ cwd: worktreePath, timeoutMs: TIMEOUT_SECONDS * 1000 },
 		);
+		clearInterval(heartbeat);
 
 		const status = await runCommand("git status --porcelain", { cwd: worktreePath });
 		const diffStat = await runCommand("git diff --stat HEAD", { cwd: worktreePath });
@@ -195,12 +224,10 @@ for (const task of TASKS) {
 		// The node_modules symlink this script created is excluded: it is not the agent's work.
 		await runCommand("git add -A -N", { cwd: worktreePath });
 		const patch = await runCommand('git diff HEAD -- . ":(exclude)node_modules"', { cwd: worktreePath });
-		await mkdir(join(OUT_DIR, "diffs"), { recursive: true });
-		await writeFile(join(OUT_DIR, "diffs", `${name}.patch`), patch.stdout.slice(0, 400_000));
+		await writeFile(patchPath, patch.stdout.slice(0, 400_000));
 		const changedFiles = status.stdout.split("\n").filter((line) => line.trim().length > 0).length;
-		const changedLines = (diffStat.stdout.match(/(\d+) insertions?/)?.[1] ?? "0")
-			? Number(diffStat.stdout.match(/(\d+) insertions?/)?.[1])
-			: 0;
+		const insertionText = diffStat.stdout.match(/(\d+) insertions?/)?.[1];
+		const changedLines = insertionText ? Number(insertionText) : 0;
 
 		const checks: CheckResult[] = [];
 		for (const command of [...BASE_CHECKS, ...(task.extraChecks ?? [])]) {
@@ -212,7 +239,7 @@ for (const task of TASKS) {
 			});
 		}
 		const ok = piRun.code === 0 && !piRun.timedOut && checks.every((check) => check.ok);
-		results.push({
+		const record: AbRun = {
 			task: task.id,
 			tier: tier.name,
 			model,
@@ -225,7 +252,10 @@ for (const task of TASKS) {
 			checks,
 			ok,
 			review: "",
-		});
+		};
+		results.push(record);
+		// Append per run: an abort must not lose what already finished.
+		await appendFile(resultsPath, `${JSON.stringify(record)}\n`);
 		const failed = checks.filter((check) => !check.ok).map((check) => check.command);
 		console.log(
 			`   pi exit=${piRun.code}${piRun.timedOut ? "(超时)" : ""} ${Math.round(piRun.durationMs / 1000)}s · ` +
@@ -238,23 +268,27 @@ for (const task of TASKS) {
 		if (!KEEP) {
 			await runCommand(`git worktree remove --force "${worktreePath}"`, { cwd: REPO_ROOT });
 		}
+		// --keep 把 worktree 移交给用户；之后的中断不会再清理它。
+		currentWorktree = undefined;
 	}
 }
-
-await writeFile(join(OUT_DIR, "ab-results.jsonl"), `${results.map((run) => JSON.stringify(run)).join("\n")}\n`);
 
 console.log("\n任务            低档(完成/检查)   高档(完成/检查)  低档改动  高档改动");
 for (const task of TASKS) {
 	const low = results.find((run) => run.task === task.id && run.tier === "low");
 	const high = results.find((run) => run.task === task.id && run.tier === "high");
-	const mark = (run?: AbRun) =>
-		`${run === undefined ? "未跑" : run.exitCode === 0 && !run.timedOut ? "完成" : "未完成"}/${run === undefined ? "-" : run.checks.every((check) => check.ok) ? "通过" : "失败"}`;
+	const lowSkipped = skipped.has(`${task.id}-low`);
+	const highSkipped = skipped.has(`${task.id}-high`);
+	const mark = (run?: AbRun, wasSkipped?: boolean) =>
+		wasSkipped
+			? "跳过/已有"
+			: `${run === undefined ? "未跑" : run.exitCode === 0 && !run.timedOut ? "完成" : "未完成"}/${run === undefined ? "-" : run.checks.every((check) => check.ok) ? "通过" : "失败"}`;
 	console.log(
-		`${task.id.padEnd(16)} ${mark(low).padEnd(18)} ${mark(high).padEnd(16)} ` +
+		`${task.id.padEnd(16)} ${mark(low, lowSkipped).padEnd(18)} ${mark(high, highSkipped).padEnd(16)} ` +
 			`${String(low?.changedLines ?? "-").padStart(8)} ${String(high?.changedLines ?? "-").padStart(9)}`,
 	);
 }
-console.log(`\n写入 ${join(OUT_DIR, "ab-results.jsonl")}`);
+console.log(`\n结果逐条追加在 ${resultsPath}（重复运行会产生多条历史记录）。`);
 console.log(`每个 run 的完整改动：${join(OUT_DIR, "diffs")}/<task>-<tier>.patch`);
 console.log("人工必做：逐条看低档的 diff（对比高档 patch），填 review 列后再下“能否降档”的结论。");
 console.log("“检查通过”只说明没把仓库弄坏，不说明任务真的做完了。");
