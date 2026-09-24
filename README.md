@@ -2,6 +2,22 @@
 
 Pi 扩展：用 **Jev**（TypeSafe System One 决策模型）判断新会话首个任务的特征，自动路由到合适的模型与推理强度。
 
+## 安装与更新
+
+```bash
+# 方式 1：npm（发布后 API 索引有几分钟延迟）
+pi install npm:@darwish-yu/pi-jev-router
+
+# 方式 2：Git（立即可用）
+pi install git:github.com/LonelyFellas/pi-jev-router
+
+# 更新 / 查看 / 卸载
+pi update
+pi list
+```
+
+本地开发不走安装，用符号链接即可（见下方“新用户首次设置”）。
+
 ## 原理
 
 ```
