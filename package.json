@@ -1,14 +1,15 @@
 {
-  "name": "pi-jev-router",
-  "version": "0.1.0",
-  "private": true,
+  "name": "@lonelyfellas/pi-jev-router",
+  "version": "0.2.0",
   "type": "module",
+  "description": "Pi extension: route the first task of a session to a suitable model via the Jev (TypeSafe System One) decision model",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LonelyFellas/pi-jev-router.git"
+  },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "typebox": "^1.0.0"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.87.1",
