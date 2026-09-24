@@ -3,6 +3,7 @@
   "version": "0.2.0",
   "type": "module",
   "description": "Pi extension: route the first task of a session to a suitable model via the Jev (TypeSafe System One) decision model",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/LonelyFellas/pi-jev-router.git"
